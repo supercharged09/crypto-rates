@@ -1,0 +1,68 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: crypto
+          POSTGRES_PASSWORD: crypto
+          POSTGRES_DB: crypto_rates
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U crypto"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Run migrations
+        run: |
+          go install -tags 'postgres' github.com/golang-migrate/migrate/v4/cmd/migrate@latest
+          migrate -path migrations -database "postgres://crypto:crypto@localhost:5432/crypto_rates?sslmode=disable" up
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgres://crypto:crypto@localhost:5432/crypto_rates?sslmode=disable
+        run: go test ./... -v
+
+  build-and-deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t crypto-rates:latest .
+
+      # Для Railway — просто пуш в репозиторий, Railway сам подхватит
+      - name: Deploy to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          npm install -g @railway/cli
+          railway up --service crypto-rates

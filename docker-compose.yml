@@ -1,0 +1,42 @@
+services:
+  app:
+    build: .
+    container_name: crypto_rates_app
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://crypto:crypto@postgres:5432/crypto_rates?sslmode=disable
+      EXTERNAL_API_URL: https://api.coingecko.com/api/v3
+      TELEGRAM_TOKEN: ${TELEGRAM_TOKEN}
+      UPDATE_INTERVAL: 5m
+      HTTP_SERVER_PORT: 8080
+      LOG_FILE: /app/logs/crypto-rates.log
+      LOG_MAX_SIZE: 10
+      LOG_MAX_BACKUPS: 5
+      LOG_MAX_AGE: 30
+      LOG_TO_STDOUT: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./logs:/app/logs
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: crypto_postgres
+    environment:
+      POSTGRES_USER: crypto
+      POSTGRES_PASSWORD: crypto
+      POSTGRES_DB: crypto_rates
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypto -d crypto_rates"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres_data:
