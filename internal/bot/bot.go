@@ -24,6 +24,7 @@ type CryptoBot struct {
 	subRepo          *repository.SubscriptionRepository
 	analyticsService *service.AnalyticsService
 	chartService     *service.ChartService
+	alertService     *service.AlertService
 }
 
 // NewCryptoBot - создание нового бота
@@ -33,6 +34,7 @@ func NewCryptoBot(
 	subRepo *repository.SubscriptionRepository,
 	analyticsService *service.AnalyticsService,
 	chartService *service.ChartService,
+	alertService *service.AlertService,
 ) (*CryptoBot, error) {
 	// Создаём HTTP клиент с кастомным DNS (Google DNS)
 	httpClient := &http.Client{
@@ -67,6 +69,7 @@ func NewCryptoBot(
 		subRepo:          subRepo,
 		analyticsService: analyticsService,
 		chartService:     chartService,
+		alertService:     alertService,
 	}, nil
 }
 
@@ -208,6 +211,12 @@ func (b *CryptoBot) handleMessage(msg *tgbotapi.Message) {
 		b.cmdStart(msg)
 	case msg.Command() == "rates", strings.HasPrefix(msg.Command(), "rates_"):
 		b.cmdRates(msg)
+	case msg.Command() == "alert":
+		b.cmdAlert(msg)
+	case msg.Command() == "alerts":
+		b.cmdListAlerts(msg)
+	case msg.Command() == "delalert":
+		b.cmdDeleteAlert(msg)
 	case msg.Command() == "start_auto":
 		b.cmdStartAuto(msg)
 	case msg.Command() == "stop_auto":
@@ -215,6 +224,100 @@ func (b *CryptoBot) handleMessage(msg *tgbotapi.Message) {
 	default:
 		b.replyWithInline(msg.Chat.ID, "Неизвестная команда", getMainKeyboard())
 	}
+}
+
+// cmdAlert — обработчик /alert BTC above 70000
+func (b *CryptoBot) cmdAlert(msg *tgbotapi.Message) {
+	args := strings.Fields(msg.CommandArguments())
+	if len(args) < 3 {
+		b.reply(msg.Chat.ID, "Использование: /alert BTC above 70000\nили /alert ETH below 1500")
+		return
+	}
+
+	crypto := strings.ToLower(args[0])
+	direction := strings.ToLower(args[1])
+	threshold, err := strconv.ParseFloat(args[2], 64)
+	if err != nil {
+		b.reply(msg.Chat.ID, "❌ Неверный формат порога")
+		return
+	}
+
+	info := model.GetCryptoInfo(crypto)
+	cryptoID := crypto
+	if info != nil {
+		cryptoID = info.ID
+	}
+
+	if direction != "above" && direction != "below" {
+		b.reply(msg.Chat.ID, "❌ Направление: above (выше) или below (ниже)")
+		return
+	}
+
+	if err := b.alertService.CreateAlert(context.Background(), msg.Chat.ID, cryptoID, direction, threshold); err != nil {
+		b.reply(msg.Chat.ID, "❌ Ошибка создания алерта")
+		return
+	}
+
+	b.reply(msg.Chat.ID, fmt.Sprintf(
+		"✅ Алерт создан!\n%s %s $%.2f\nПроверка каждые 30 секунд",
+		cryptoID, direction, threshold,
+	))
+}
+
+// cmdListAlerts — показать все алерты пользователя
+func (b *CryptoBot) cmdListAlerts(msg *tgbotapi.Message) {
+	alerts, err := b.alertService.GetUserAlerts(context.Background(), msg.Chat.ID)
+	if err != nil {
+		b.reply(msg.Chat.ID, "❌ Ошибка получения алертов")
+		return
+	}
+
+	if len(alerts) == 0 {
+		b.reply(msg.Chat.ID, "У вас нет активных алертов")
+		return
+	}
+
+	var text strings.Builder
+	text.WriteString("🔔 *Ваши алерты:*\n\n")
+	for _, a := range alerts {
+		status := "✅"
+		if !a.IsActive {
+			status = "⏹"
+		}
+		text.WriteString(fmt.Sprintf(
+			"%s [%d] %s %s $%.2f\n",
+			status, a.ID, a.Cryptocurrency, a.Direction, a.PriceThreshold,
+		))
+	}
+
+	b.reply(msg.Chat.ID, text.String())
+}
+
+// cmdDeleteAlert — отключить алерт по ID
+func (b *CryptoBot) cmdDeleteAlert(msg *tgbotapi.Message) {
+	args := strings.TrimSpace(msg.CommandArguments())
+	if args == "" {
+		b.reply(msg.Chat.ID, "Использование: /delalert 5")
+		return
+	}
+
+	id, err := strconv.ParseInt(args, 10, 64)
+	if err != nil {
+		b.reply(msg.Chat.ID, "❌ Неверный ID")
+		return
+	}
+
+	if err := b.alertService.DeactivateAlert(context.Background(), id); err != nil {
+		b.reply(msg.Chat.ID, "❌ Ошибка отключения")
+		return
+	}
+
+	b.reply(msg.Chat.ID, fmt.Sprintf("✅ Алерт #%d отключён", id))
+}
+
+// SendAlert — отправка уведомления об алерте
+func (b *CryptoBot) SendAlert(chatID int64, message string) {
+	b.reply(chatID, message)
 }
 
 // cmdStart - обработчик /start
@@ -234,6 +337,9 @@ func (b *CryptoBot) cmdStart(msg *tgbotapi.Message) {
 			"и любая другая монета с CoinGecko\n" +
 			"/start\\_auto 10 — авто-рассылка\n" +
 			"/stop\\_auto — отключить рассылку\n\n" +
+			"/alert BTC above 70000 — алерт\n" +
+			"/alerts — список алертов\n" +
+			"/delalert 5 — отключить алерт\n" +
 			"Для монет с дефисом используйте:\n" +
 			"/rates shiba-inu\n" +
 			"/rates bitcoin-cash\n\n" +

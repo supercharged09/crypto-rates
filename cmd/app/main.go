@@ -53,7 +53,9 @@ func main() {
 	rateRepo := repository.NewRateRepository(db)
 	subRepo := repository.NewSubscriptionRepository(db)
 	userRepo := repository.NewUserRepository(db)
+	alertRepo := repository.NewAlertRepository(db)
 	rateService := service.NewRateService(coinGeckoClient, rateRepo)
+	alertService := service.NewAlertService(alertRepo)
 	analyticsService := service.NewAnalyticsService(userRepo)
 	chartService := service.NewChartService(rateRepo)
 	rateHandler := handler.NewRateHandler(rateService, analyticsService, chartService)
@@ -62,7 +64,7 @@ func main() {
 	router := handler.NewRouter(rateHandler)
 
 	//telegram bot
-	cryptoBot, err := bot.NewCryptoBot(cfg.TelegramToken, rateService, subRepo, analyticsService, chartService)
+	cryptoBot, err := bot.NewCryptoBot(cfg.TelegramToken, rateService, subRepo, analyticsService, chartService, alertService)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}
@@ -106,6 +108,8 @@ func main() {
 	go cryptoBot.Start(ctxBg)
 	//запуск планировщика рассылки
 	go scheduler.Start(ctxBg)
+	//запуск проверки алертов
+	go alertService.StartAlertChecker(ctxBg, rateService, cryptoBot)
 
 	// Graceful shutdown
 	quit := make(chan os.Signal, 1)
