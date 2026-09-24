@@ -60,6 +60,17 @@ func Start(cfg *config.Config) {
 	}
 	log.Println("Database connection established")
 
+	// Автомиграции GORM
+	if err := db.AutoMigrate(
+		&model.Rate{},
+		&model.Subscription{},
+		&model.User{},
+		&model.Alert{},
+	); err != nil {
+		log.Fatalf("Failed to run migrations: %v", err)
+	}
+	log.Println("Database migrations applied")
+
 	// создаём компоненты
 	coinGeckoClient := client.NewCoinGeckoClient(cfg.CoinGecko)
 	rateRepo := repository.NewRateRepository(db)
