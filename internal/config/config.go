@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -88,39 +89,34 @@ func MustLoad() *Config {
 	var cfg Config
 
 	envPath := findEnvFile()
-	if envPath == "" {
-		panic("config: .env file not found")
+	if envPath != "" {
+		// .env найден — читаем из него
+		if err := cleanenv.ReadConfig(envPath, &cfg); err != nil {
+			panic(fmt.Sprintf("config error reading %s: %s", envPath, err))
+		}
+		log.Printf("Loaded config from: %s", envPath)
+	} else {
+		// .env не найден — читаем из переменных окружения (для Docker/Railway)
+		log.Println("Config: .env not found, using environment variables")
+		if err := cleanenv.ReadEnv(&cfg); err != nil {
+			panic(fmt.Sprintf("config error from env: %s", err))
+		}
 	}
 
-	if err := cleanenv.ReadConfig(envPath, &cfg); err != nil {
-		panic(fmt.Sprintf("config error reading %s: %s", envPath, err))
-	}
-
-	// Читаем ServiceConfig отдельно, т.к. он не вложен в Config
+	// читаем ServiceConfig отдельно
 	var svc ServiceConfig
-	if err := cleanenv.ReadConfig(envPath, &svc); err != nil {
-		panic(fmt.Sprintf("config error reading service config: %s", err))
+	if envPath != "" {
+		if err := cleanenv.ReadConfig(envPath, &svc); err != nil {
+			panic(fmt.Sprintf("config error reading service config: %s", err))
+		}
+	} else {
+		if err := cleanenv.ReadEnv(&svc); err != nil {
+			panic(fmt.Sprintf("config error reading service env: %s", err))
+		}
 	}
 	cfg.Service = svc
 
 	return &cfg
-}
-
-// findEnvFile ищет .env в текущей директории и в корне проекта
-func findEnvFile() string {
-	if fileExists(".env") {
-		return ".env"
-	}
-
-	root := findProjectRoot()
-	if root != "" {
-		envPath := filepath.Join(root, ".env")
-		if fileExists(envPath) {
-			return envPath
-		}
-	}
-
-	return ""
 }
 
 // findProjectRoot поднимается до директории с go.mod
