@@ -34,8 +34,7 @@ func NewRateService(
 	}
 }
 
-//FetchAndSaveRates получает курсы из API и сохраняет в БД
-
+// FetchAndSaveRates получает курсы из API и сохраняет в БД
 func (s *RateService) FetchAndSaveRates(ctx context.Context) error {
 	log.Println("Fetching rates from CoinGecko...")
 
@@ -53,9 +52,10 @@ func (s *RateService) FetchAndSaveRates(ctx context.Context) error {
 			continue
 		}
 
+		// Конвертируем доллары в копейки для хранения
 		rate := model.Rate{
 			Cryptocurrency: crypto.ID,
-			PriceUSD:       price,
+			PriceUSDCents:  model.FloatToCents(price),
 			Timestamp:      now,
 		}
 		if err := s.rateRepo.Save(ctx, rate); err != nil {
@@ -68,7 +68,7 @@ func (s *RateService) FetchAndSaveRates(ctx context.Context) error {
 
 // GetRateStats получает полную статистику по криптовалюте
 func (s *RateService) GetRateStats(ctx context.Context, cryptocurrency string) (*model.RateStats, error) {
-	//текущий курс
+	// текущий курс
 	current, err := s.rateRepo.GetCurrentPrice(ctx, cryptocurrency)
 	if err != nil {
 		return nil, err
@@ -77,13 +77,16 @@ func (s *RateService) GetRateStats(ctx context.Context, cryptocurrency string) (
 		return nil, fmt.Errorf("no data for %s", cryptocurrency)
 	}
 
-	//Min/Max за 24 часа
+	// конвертируем копейки в доллары
+	currentPrice := model.CentsToFloat(current.PriceUSDCents)
+
+	// Min/Max за 24 часа
 	min, max, err := s.rateRepo.GetMinMax24h(ctx, cryptocurrency)
 	if err != nil {
 		return nil, err
 	}
 
-	//изменение за час
+	// изменение за час
 	priceHourAgo, err := s.rateRepo.GetPriceHourAgo(ctx, cryptocurrency)
 	if err != nil {
 		return nil, err
@@ -91,12 +94,12 @@ func (s *RateService) GetRateStats(ctx context.Context, cryptocurrency string) (
 
 	var changePercent float64
 	if priceHourAgo > 0 {
-		changePercent = ((current.PriceUSD - priceHourAgo) / priceHourAgo) * 100
+		changePercent = ((currentPrice - priceHourAgo) / priceHourAgo) * 100
 	}
 
 	return &model.RateStats{
 		Cryptocurrency:  cryptocurrency,
-		CurrentPrice:    current.PriceUSD,
+		CurrentPrice:    currentPrice,
 		MinPrice24h:     min,
 		MaxPrice24h:     max,
 		ChangePercent1h: changePercent,
@@ -106,12 +109,12 @@ func (s *RateService) GetRateStats(ctx context.Context, cryptocurrency string) (
 
 // StartBackgroundUpdater запускает фоновое обновление курсов
 func (s *RateService) StartBackgroundUpdater(ctx context.Context, interval time.Duration) {
-	//первый запуск сразу
+	// первый запуск сразу
 	if err := s.FetchAndSaveRates(ctx); err != nil {
 		log.Printf("ERROR: initial fetch failed: %v", err)
 	}
 
-	//Тикер для периодического обновления
+	// Тикер для периодического обновления
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -145,7 +148,7 @@ func (s *RateService) GetAnyRate(ctx context.Context, cryptoID string) (*model.R
 	return &model.RateStats{
 		Cryptocurrency:  cryptoID,
 		CurrentPrice:    price,
-		MinPrice24h:     price, // Нет исторических данных
+		MinPrice24h:     price,
 		MaxPrice24h:     price,
 		ChangePercent1h: 0,
 		LastUpdated:     time.Now(),

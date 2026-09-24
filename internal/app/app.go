@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,13 +10,15 @@ import (
 	"syscall"
 	"time"
 
-	_ "github.com/jackc/pgx/v5/stdlib"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 
 	"github.com/supercharged09/crypto-rates/internal/bot"
 	"github.com/supercharged09/crypto-rates/internal/client"
 	"github.com/supercharged09/crypto-rates/internal/config"
 	"github.com/supercharged09/crypto-rates/internal/handler"
 	"github.com/supercharged09/crypto-rates/internal/logger"
+	"github.com/supercharged09/crypto-rates/internal/model"
 	"github.com/supercharged09/crypto-rates/internal/repository"
 	"github.com/supercharged09/crypto-rates/internal/service"
 )
@@ -36,26 +37,30 @@ func Start(cfg *config.Config) {
 	log.Println("Config loaded successfully")
 
 	// подключаемся к БД
-	db, err := sql.Open("pgx", cfg.Database.DSN())
+	db, err := gorm.Open(postgres.Open(cfg.Database.DSN()), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
 
-	db.SetMaxOpenConns(cfg.Database.MaxOpenConns)
-	db.SetMaxIdleConns(cfg.Database.MaxIdleConns)
+	sqlDB, err := db.DB()
+	if err != nil {
+		log.Fatalf("Failed to get sql.DB: %v", err)
+	}
+	defer sqlDB.Close()
+
+	sqlDB.SetMaxOpenConns(cfg.Database.MaxOpenConns)
+	sqlDB.SetMaxIdleConns(cfg.Database.MaxIdleConns)
 
 	connMaxLifetime, err := time.ParseDuration(cfg.Database.ConnMaxLifetime)
 	if err != nil {
 		log.Fatalf("Invalid DB_CONN_MAX_LIFETIME: %v", err)
 	}
-	db.SetConnMaxLifetime(connMaxLifetime)
+	sqlDB.SetConnMaxLifetime(connMaxLifetime)
 
-	// проверяем соединение
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	if err := db.PingContext(ctx); err != nil {
+	if err := sqlDB.PingContext(ctx); err != nil {
 		log.Fatalf("Failed to ping database: %v", err)
 	}
 	log.Println("Database connection established")

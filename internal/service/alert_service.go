@@ -10,17 +10,17 @@ import (
 	"github.com/supercharged09/crypto-rates/internal/repository"
 )
 
-// AlertService — сервис алертов
+// AlertService сервис алертов
 type AlertService struct {
 	alertRepo *repository.AlertRepository
 }
 
-// NewAlertService создаёт новый сервис алертов
+// NewAlertService новый сервис алертов
 func NewAlertService(alertRepo *repository.AlertRepository) *AlertService {
 	return &AlertService{alertRepo: alertRepo}
 }
 
-// CreateAlert создаёт новый алерт
+// CreateAlert создает новый алерт
 func (s *AlertService) CreateAlert(ctx context.Context, chatID int64, cryptocurrency, direction string, threshold float64) error {
 	if direction != "above" && direction != "below" {
 		return fmt.Errorf("direction must be 'above' or 'below'")
@@ -30,10 +30,11 @@ func (s *AlertService) CreateAlert(ctx context.Context, chatID int64, cryptocurr
 	}
 
 	alert := model.Alert{
-		ChatID:         chatID,
-		Cryptocurrency: cryptocurrency,
-		Direction:      direction,
-		PriceThreshold: threshold,
+		ChatID:              chatID,
+		Cryptocurrency:      cryptocurrency,
+		Direction:           direction,
+		PriceThresholdCents: model.FloatToCents(threshold),
+		IsActive:            true,
 	}
 
 	return s.alertRepo.Create(ctx, alert)
@@ -49,7 +50,7 @@ func (s *AlertService) DeactivateAlert(ctx context.Context, id int64) error {
 	return s.alertRepo.Deactivate(ctx, id)
 }
 
-// AlertSender — интерфейс для отправки уведомлений
+// AlertSender нтерфейс для отправки уведомлений
 type AlertSender interface {
 	SendAlert(chatID int64, message string)
 }
@@ -86,11 +87,14 @@ func (s *AlertService) checkAlerts(ctx context.Context, rateSvc *RateService, se
 			continue
 		}
 
+		//порог из центов в  дуллеры
+		threshold := model.CentsToFloat(alert.PriceThresholdCents)
+
 		triggered := false
-		if alert.Direction == "above" && stats.CurrentPrice >= alert.PriceThreshold {
+		if alert.Direction == "above" && stats.CurrentPrice >= threshold {
 			triggered = true
 		}
-		if alert.Direction == "below" && stats.CurrentPrice <= alert.PriceThreshold {
+		if alert.Direction == "below" && stats.CurrentPrice <= threshold {
 			triggered = true
 		}
 
@@ -100,7 +104,7 @@ func (s *AlertService) checkAlerts(ctx context.Context, rateSvc *RateService, se
 				alert.Cryptocurrency,
 				stats.CurrentPrice,
 				map[string]string{"above": "выше", "below": "ниже"}[alert.Direction],
-				alert.PriceThreshold,
+				threshold,
 			)
 			sender.SendAlert(alert.ChatID, message)
 

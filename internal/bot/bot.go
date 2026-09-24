@@ -12,6 +12,7 @@ import (
 	"time"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
+	"github.com/supercharged09/crypto-rates/internal/config"
 	"github.com/supercharged09/crypto-rates/internal/model"
 	"github.com/supercharged09/crypto-rates/internal/repository"
 	"github.com/supercharged09/crypto-rates/internal/service"
@@ -25,38 +26,38 @@ type CryptoBot struct {
 	analyticsService *service.AnalyticsService
 	chartService     *service.ChartService
 	alertService     *service.AlertService
+	updatesTimeout   int
 }
 
 // NewCryptoBot - создание нового бота
 func NewCryptoBot(
-	token string,
+	cfg config.TelegramConfig,
 	rateSvc *service.RateService,
 	subRepo *repository.SubscriptionRepository,
 	analyticsService *service.AnalyticsService,
 	chartService *service.ChartService,
 	alertService *service.AlertService,
 ) (*CryptoBot, error) {
-	// Создаём HTTP клиент с кастомным DNS (Google DNS)
+	// Создаём HTTP клиент с кастомным DNS
 	httpClient := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second,
 		Transport: &http.Transport{
 			DialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
+				Timeout:   time.Duration(cfg.DialTimeoutSec) * time.Second,
 				KeepAlive: 30 * time.Second,
 				Resolver: &net.Resolver{
 					PreferGo: true,
 					Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
 						d := net.Dialer{Timeout: 5 * time.Second}
-						// Используем Google DNS (8.8.8.8) и Cloudflare DNS (1.1.1.1)
 						return d.DialContext(ctx, network, "8.8.8.8:53")
 					},
 				},
 			}).DialContext,
-			TLSHandshakeTimeout: 15 * time.Second,
+			TLSHandshakeTimeout: time.Duration(cfg.TLSTimeoutSec) * time.Second,
 		},
 	}
 
-	api, err := tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, httpClient)
+	api, err := tgbotapi.NewBotAPIWithClient(cfg.Token, tgbotapi.APIEndpoint, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
@@ -70,6 +71,7 @@ func NewCryptoBot(
 		analyticsService: analyticsService,
 		chartService:     chartService,
 		alertService:     alertService,
+		updatesTimeout:   cfg.UpdatesTimeout,
 	}, nil
 }
 
@@ -79,7 +81,7 @@ func (b *CryptoBot) Start(ctx context.Context) {
 
 	//конфиг получения обновлений
 	u := tgbotapi.NewUpdate(0)
-	u.Timeout = 60
+	u.Timeout = b.updatesTimeout
 
 	//получение канала с обновлениями
 	updates := b.api.GetUpdatesChan(u)
@@ -286,7 +288,7 @@ func (b *CryptoBot) cmdListAlerts(msg *tgbotapi.Message) {
 		}
 		text.WriteString(fmt.Sprintf(
 			"%s [%d] %s %s $%.2f\n",
-			status, a.ID, a.Cryptocurrency, a.Direction, a.PriceThreshold,
+			status, a.ID, a.Cryptocurrency, a.Direction, model.CentsToFloat(a.PriceThresholdCents),
 		))
 	}
 

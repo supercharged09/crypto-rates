@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"time"
+
+	"github.com/supercharged09/crypto-rates/internal/config"
 )
 
 // CoinGeckoClient - клиент для работы с API CoinGecko
@@ -21,11 +23,11 @@ type CoinGeckoAPI interface {
 }
 
 // NewCoinGeckoClient создает новый экземпляр клиента
-func NewCoinGeckoClient(baseURL string) *CoinGeckoClient {
+func NewCoinGeckoClient(cfg config.CoinGeckoConfig) *CoinGeckoClient {
 	return &CoinGeckoClient{
-		baseURL: baseURL,
+		baseURL: cfg.BaseURL,
 		httpClient: &http.Client{
-			Timeout: 10 * time.Second,
+			Timeout: time.Duration(cfg.TimeoutSecond) * time.Second,
 		},
 	}
 }
@@ -47,13 +49,11 @@ func (c *CoinGeckoClient) GetPrices() (map[string]float64, error) {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
-	//парсинг в map[string]map[string]float64
 	var result map[string]map[string]float64
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
-	//преобразование в простую мапу map[crypto]price
 	prices := make(map[string]float64)
 	for crypto, usdPrice := range result {
 		prices[crypto] = usdPrice["usd"]
@@ -70,7 +70,6 @@ func (c *CoinGeckoClient) GetPrice(crypto string) (float64, error) {
 	}
 
 	price, ok := prices[crypto]
-
 	if !ok {
 		return 0, fmt.Errorf("cryptocurrency %s not found in response", crypto)
 	}
