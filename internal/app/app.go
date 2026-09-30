@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	stdlog "log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 
 	"github.com/supercharged09/crypto-rates/internal/bot"
 	"github.com/supercharged09/crypto-rates/internal/client"
@@ -22,6 +24,24 @@ import (
 	"github.com/supercharged09/crypto-rates/internal/repository"
 	"github.com/supercharged09/crypto-rates/internal/service"
 )
+
+// newGormLogger создаёт настроенный логгер GORM
+func newGormLogger(cfg *config.Config) gormlogger.Interface {
+	logLevel := gormlogger.Warn
+	if os.Getenv("ENV") == "development" {
+		logLevel = gormlogger.Warn //было Info
+	}
+
+	return gormlogger.New(
+		stdlog.New(os.Stdout, "\r\n", stdlog.LstdFlags),
+		gormlogger.Config{
+			SlowThreshold:             200 * time.Millisecond, // логировать запросы дольше 200мс
+			LogLevel:                  logLevel,               // уровень: Silent, Error, Warn, Info
+			IgnoreRecordNotFoundError: true,                   // ← НЕ логировать "record not found"
+			Colorful:                  false,                  // без цветов (для файлов)
+		},
+	)
+}
 
 // Start запускает приложение целиком
 func Start(cfg *config.Config) {
@@ -37,7 +57,9 @@ func Start(cfg *config.Config) {
 	log.Println("Config loaded successfully")
 
 	// подключаемся к БД
-	db, err := gorm.Open(postgres.Open(cfg.Database.DSN()), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(cfg.Database.DSN()), &gorm.Config{
+		Logger: newGormLogger(cfg),
+	})
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)
 	}
@@ -71,6 +93,7 @@ func Start(cfg *config.Config) {
 		&model.Subscription{},
 		&model.User{},
 		&model.Alert{},
+		&model.TrackedCrypto{},
 	); err != nil {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
@@ -82,7 +105,8 @@ func Start(cfg *config.Config) {
 	subRepo := repository.NewSubscriptionRepository(db)
 	userRepo := repository.NewUserRepository(db)
 	alertRepo := repository.NewAlertRepository(db)
-	rateService := service.NewRateService(coinGeckoClient, rateRepo)
+	trackedRepo := repository.NewTrackedCryptoRepository(db)
+	rateService := service.NewRateService(coinGeckoClient, rateRepo, trackedRepo)
 	analyticsService := service.NewAnalyticsService(userRepo)
 	chartService := service.NewChartService(rateRepo)
 	alertService := service.NewAlertService(alertRepo)
@@ -92,7 +116,14 @@ func Start(cfg *config.Config) {
 	router := handler.NewRouter(rateHandler)
 
 	// Telegram бот
-	cryptoBot, err := bot.NewCryptoBot(cfg.Telegram, rateService, subRepo, analyticsService, chartService, alertService)
+	cryptoBot, err := bot.NewCryptoBot(
+		cfg.Telegram,
+		rateService,
+		subRepo,
+		analyticsService,
+		chartService,
+		alertService,
+		trackedRepo)
 	if err != nil {
 		log.Fatalf("Failed to create bot: %v", err)
 	}

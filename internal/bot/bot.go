@@ -26,6 +26,7 @@ type CryptoBot struct {
 	analyticsService *service.AnalyticsService
 	chartService     *service.ChartService
 	alertService     *service.AlertService
+	trackedRepo      *repository.TrackedCryptoRepository
 	updatesTimeout   int
 }
 
@@ -37,6 +38,7 @@ func NewCryptoBot(
 	analyticsService *service.AnalyticsService,
 	chartService *service.ChartService,
 	alertService *service.AlertService,
+	trackedRepo *repository.TrackedCryptoRepository,
 ) (*CryptoBot, error) {
 	// Создаём HTTP клиент с кастомным DNS
 	httpClient := &http.Client{
@@ -72,6 +74,7 @@ func NewCryptoBot(
 		chartService:     chartService,
 		alertService:     alertService,
 		updatesTimeout:   cfg.UpdatesTimeout,
+		trackedRepo:      trackedRepo,
 	}, nil
 }
 
@@ -180,6 +183,15 @@ func (b *CryptoBot) handleCallback(callback *tgbotapi.CallbackQuery) {
 		}
 		b.reply(chatID, "✅ Авто-рассылка отключена")
 
+	case "tracked_list":
+		b.cmdTracked(callback.Message)
+
+	case "stats_show":
+		b.cmdStats(callback.Message)
+
+	case "help_show":
+		b.cmdHelp(callback.Message)
+
 	case "chart_btc":
 		b.sendChartHTML(chatID, "bitcoin", "Bitcoin")
 	case "chart_eth":
@@ -211,8 +223,14 @@ func (b *CryptoBot) handleMessage(msg *tgbotapi.Message) {
 	switch {
 	case msg.Command() == "start":
 		b.cmdStart(msg)
+	case msg.Command() == "help":
+		b.cmdHelp(msg)
 	case msg.Command() == "rates", strings.HasPrefix(msg.Command(), "rates_"):
 		b.cmdRates(msg)
+	case msg.Command() == "tracked":
+		b.cmdTracked(msg)
+	case msg.Command() == "untrack":
+		b.cmdUntrack(msg)
 	case msg.Command() == "alert":
 		b.cmdAlert(msg)
 	case msg.Command() == "alerts":
@@ -223,8 +241,10 @@ func (b *CryptoBot) handleMessage(msg *tgbotapi.Message) {
 		b.cmdStartAuto(msg)
 	case msg.Command() == "stop_auto":
 		b.cmdStopAuto(msg)
+	case msg.Command() == "stats":
+		b.cmdStats(msg)
 	default:
-		b.replyWithInline(msg.Chat.ID, "Неизвестная команда", getMainKeyboard())
+		b.replyWithInline(msg.Chat.ID, "Неизвестная команда. /help — список команд", getMainKeyboard())
 	}
 }
 
@@ -338,13 +358,17 @@ func (b *CryptoBot) cmdStart(msg *tgbotapi.Message) {
 			"/rates\\_cardano — курс Cardano\n" +
 			"и любая другая монета с CoinGecko\n" +
 			"/start\\_auto 10 — авто-рассылка\n" +
-			"/stop\\_auto — отключить рассылку\n\n" +
+			"/stop\\_auto — отключить рассылку\n" +
 			"/alert BTC above 70000 — алерт\n" +
 			"/alerts — список алертов\n" +
 			"/delalert 5 — отключить алерт\n" +
 			"Для монет с дефисом используйте:\n" +
 			"/rates shiba-inu\n" +
-			"/rates bitcoin-cash\n\n" +
+			"/rates bitcoin-cash\n" +
+			"/rates любаямонета — монета автоматически добавляется в фоновое обновление и каждые 5 минут проверяет курс. Покажет минимум/максимум за 24 часа (после накопления данных) при повторном запросе\n\n" +
+			"/tracked — 📋что отслеживаем\n" +
+			"/stats — 📊статистика\n" +
+			"/help — 📖полный список команд\n\n" +
 			"Или используй кнопки 👇",
 	)
 	b.replyWithInline(msg.Chat.ID, text, getMainKeyboard())
@@ -395,26 +419,27 @@ func (b *CryptoBot) cmdRates(msg *tgbotapi.Message) {
 	b.replyWithInline(msg.Chat.ID, text, getMainKeyboard())
 }
 
-// getAnyRateText получает текст для произвольной монеты
+// getAnyRateText получение текста для произвольной монеты
 func (b *CryptoBot) getAnyRateText(cryptoID string) (string, error) {
 	stats, err := b.rateSvc.GetAnyRate(context.Background(), cryptoID)
 	if err != nil {
 		return "", err
 	}
 
-	// Форматируем вручную, так как монета не в SupportedCryptos
-	return fmt.Sprintf(
-		"🪙 *%s*\n"+
-			"💵 Цена: $%s\n"+
-			"📉 Мин за 24ч: $%.2f\n"+
-			"📈 Макс за 24ч: $%.2f\n"+
-			"🕐 Обновлено: %s",
-		cryptoID,
-		formatPrice(stats.CurrentPrice),
-		stats.MinPrice24h,
-		stats.MaxPrice24h,
-		stats.LastUpdated.Format("15:04:05"),
-	), nil
+	// Добавляем монету в отслеживаемые (если ещё нет)
+	if b.trackedRepo != nil {
+		tracked := model.TrackedCrypto{
+			CoinID: cryptoID,
+			Symbol: strings.ToUpper(cryptoID),
+			Name:   cryptoID,
+			Emoji:  "🪙",
+		}
+		if err := b.trackedRepo.Add(context.Background(), tracked); err != nil {
+			log.Printf("WARNING: failed to track crypto %s: %v", cryptoID, err)
+		}
+	}
+
+	return formatRateMessage(stats), nil
 }
 
 // cmdStartAuto - обработчик /start-auto {minutes}
@@ -526,9 +551,16 @@ func (b *CryptoBot) SendRateToChat(chatID int64) {
 // formatRateMessage форматирует статистику в читаемый текст
 func formatRateMessage(stats *model.RateStats) string {
 	info := model.GetCryptoInfo(stats.Cryptocurrency)
-	if info == nil {
-		//fallback для данных без информации, но этого не должно случиться
-		return fmt.Sprintf("*%s*\nЦена: $%s", stats.Cryptocurrency, formatPrice(stats.CurrentPrice))
+
+	// Определяем отображаемое имя и эмодзи
+	var name, emoji string
+	if info != nil {
+		name = info.Name
+		emoji = info.Emoji
+	} else {
+		// Произвольная монета — используем ID с заглавной буквы
+		name = strings.ToUpper(stats.Cryptocurrency[:1]) + stats.Cryptocurrency[1:]
+		emoji = "🪙"
 	}
 
 	changeSign := "+"
@@ -539,11 +571,11 @@ func formatRateMessage(stats *model.RateStats) string {
 	return fmt.Sprintf(
 		"%s *%s*\n"+
 			"💵 Цена: $%s\n"+
-			"📉 Минимально за 24ч: $%.2f\n"+
-			"📈 Максимально за 24ч: $%.2f\n"+
-			"🕐 Измениние за час: %s%.2f%%",
-		info.Emoji,
-		info.Name,
+			"📉 Мин за 24ч: $%.2f\n"+
+			"📈 Макс за 24ч: $%.2f\n"+
+			"🕐 Изм. за час: %s%.2f%%",
+		emoji,
+		name,
 		formatPrice(stats.CurrentPrice),
 		stats.MinPrice24h,
 		stats.MaxPrice24h,
@@ -607,11 +639,16 @@ func getMainKeyboard() tgbotapi.InlineKeyboardMarkup {
 			tgbotapi.NewInlineKeyboardButtonData("📈 График ETH", "chart_eth"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📋 Монеты", "tracked_list"),
+			tgbotapi.NewInlineKeyboardButtonData("📊 Статистика", "stats_show"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("⏰ Авто 10 мин", "auto_10"),
 			tgbotapi.NewInlineKeyboardButtonData("⏰ Авто 30 мин", "auto_30"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("🛑 Стоп", "auto_stop"),
+			tgbotapi.NewInlineKeyboardButtonData("📖 Помощь", "help_show"),
 		),
 	)
 }
@@ -639,6 +676,10 @@ func getRatesKeyboard() tgbotapi.InlineKeyboardMarkup {
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("📈 График SOL", "chart_sol"),
 			tgbotapi.NewInlineKeyboardButtonData("📈 График XRP", "chart_xrp"),
+		),
+		tgbotapi.NewInlineKeyboardRow(
+			tgbotapi.NewInlineKeyboardButtonData("📋 Монеты", "tracked_list"),
+			tgbotapi.NewInlineKeyboardButtonData("📊 Статистика", "stats_show"),
 		),
 		tgbotapi.NewInlineKeyboardRow(
 			tgbotapi.NewInlineKeyboardButtonData("⏰ Авто 10 мин", "auto_10"),
@@ -680,4 +721,152 @@ func (b *CryptoBot) sendChartHTML(chatID int64, cryptoID string, cryptoName stri
 		log.Printf("ERROR: failed to send chart: %v", err)
 		b.reply(chatID, "Ошибка отправки графика")
 	}
+} // cmdTracked показывает список отслеживаемых монет
+func (b *CryptoBot) cmdTracked(msg *tgbotapi.Message) {
+	// Базовые монеты
+	var text strings.Builder
+	text.WriteString("📋 *Отслеживаемые монеты:*\n\n")
+	text.WriteString("*Базовые:*\n")
+	for _, c := range model.SupportedCryptos {
+		text.WriteString(fmt.Sprintf("%s %s (%s)\n", c.Emoji, c.Name, c.Symbol))
+	}
+
+	// Произвольные монеты
+	if b.trackedRepo != nil {
+		tracked, err := b.trackedRepo.GetAll(context.Background())
+		if err != nil {
+			log.Printf("ERROR: failed to get tracked cryptos: %v", err)
+			b.reply(msg.Chat.ID, "❌ Ошибка получения списка")
+			return
+		}
+
+		if len(tracked) > 0 {
+			text.WriteString("\n*Дополнительные:*\n")
+			for _, c := range tracked {
+				text.WriteString(fmt.Sprintf("%s %s (`%s`)\n", c.Emoji, c.Name, c.CoinID))
+			}
+		}
+	}
+
+	b.replyWithInline(msg.Chat.ID, text.String(), getMainKeyboard())
+}
+
+// cmdUntrack удаляет монету из отслеживаемых
+func (b *CryptoBot) cmdUntrack(msg *tgbotapi.Message) {
+	args := strings.TrimSpace(msg.CommandArguments())
+	if args == "" {
+		b.reply(msg.Chat.ID, "Использование: /untrack dogecoin")
+		return
+	}
+
+	cryptoID := strings.ToLower(args)
+
+	//проверка, что это не базовая монета
+	for _, c := range model.SupportedCryptos {
+		if c.ID == cryptoID || strings.EqualFold(c.Symbol, cryptoID) {
+			b.reply(msg.Chat.ID, fmt.Sprintf(
+				"❌ %s — базовая монета, её нельзя убрать",
+				c.Name,
+			))
+			return
+		}
+	}
+
+	if b.trackedRepo == nil {
+		b.reply(msg.Chat.ID, "❌ Функция недоступна")
+		return
+	}
+
+	if err := b.trackedRepo.Delete(context.Background(), cryptoID); err != nil {
+		log.Printf("ERROR: failed to delete tracked crypto: %v", err)
+		b.reply(msg.Chat.ID, "❌ Ошибка удаления монеты")
+		return
+	}
+
+	b.reply(msg.Chat.ID, fmt.Sprintf("✅ Монета `%s` убрана из отслеживания", cryptoID))
+}
+
+// cmdStats общая статистика сервиса
+func (b *CryptoBot) cmdStats(msg *tgbotapi.Message) {
+	ctx := context.Background()
+
+	// Пользователи
+	userStats, err := b.analyticsService.GetStats(ctx)
+	if err != nil {
+		log.Printf("ERROR: failed to get user stats: %v", err)
+		b.reply(msg.Chat.ID, "❌ Ошибка получения статистики")
+		return
+	}
+
+	// Отслеживаемые монеты
+	trackedCount := 0
+	if b.trackedRepo != nil {
+		tracked, err := b.trackedRepo.GetAll(ctx)
+		if err == nil {
+			trackedCount = len(tracked)
+		}
+	}
+
+	// Свои алерты и подписки
+	userAlerts, _ := b.alertService.GetUserAlerts(ctx, msg.Chat.ID)
+
+	var alertsActive int
+	for _, a := range userAlerts {
+		if a.IsActive {
+			alertsActive++
+		}
+	}
+
+	text := fmt.Sprintf(
+		"📊 *Статистика сервиса*\n\n"+
+			"👥 *Пользователи:*\n"+
+			"• Всего: %d\n"+
+			"• Активны за 24ч: %d\n"+
+			"• Активны за 7 дней: %d\n"+
+			"• Всего команд: %d\n\n"+
+			"🪙 *Монеты:*\n"+
+			"• Базовых: %d\n"+
+			"• Дополнительных: %d\n\n"+
+			"🔔 *Ваши алерты:* %d активных из %d\n\n"+
+			"ℹ️ _Ваш ID:_ `%d`",
+		userStats.TotalUsers,
+		userStats.Active24h,
+		userStats.Active7d,
+		userStats.TotalCommands,
+		len(model.SupportedCryptos),
+		trackedCount,
+		alertsActive,
+		len(userAlerts),
+		msg.Chat.ID,
+	)
+
+	b.replyWithInline(msg.Chat.ID, text, getMainKeyboard())
+}
+
+// cmdHelp отображение всех команд
+func (b *CryptoBot) cmdHelp(msg *tgbotapi.Message) {
+	text := "📖 *Справка по командам:*\n\n" +
+		"*Курсы:*\n" +
+		"/rates — все курсы\n" +
+		"/rates\\_btc — курс BTC\n" +
+		"/rates btc — то же самое\n" +
+		"/rates shiba-inu — для монет с дефисом\n\n" +
+		"*Отслеживание:*\n" +
+		"/tracked — список монет\n" +
+		"/untrack dogecoin — убрать монету\n\n" +
+		"*Алерты:*\n" +
+		"/alert btc above 70000 — уведомить, когда BTC > $70000\n" +
+		"/alert eth below 1500 — когда ETH < $1500\n" +
+		"/alerts — список ваших алертов\n" +
+		"/delalert 5 — удалить алерт #5\n\n" +
+		"*Авто-рассылка:*\n" +
+		"/start\\_auto 10 — каждые 10 минут\n" +
+		"/stop\\_auto — отключить\n\n" +
+		"*Графики:*\n" +
+		"Нажми кнопку 📈 График в меню\n\n" +
+		"*Прочее:*\n" +
+		"/stats — статистика сервиса\n" +
+		"/help — эта справка"
+
+	b.replyWithInline(msg.Chat.ID, text, getMainKeyboard())
 }

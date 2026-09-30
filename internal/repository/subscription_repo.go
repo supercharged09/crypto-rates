@@ -63,7 +63,7 @@ func (r *SubscriptionRepository) GetDueSubscriptions(ctx context.Context) ([]mod
 	//поиск подписок, где updated at + interval min <= NOW()
 	err := r.db.WithContext(ctx).
 		Where("is_active = TRUE").
-		Where("updated_at + (inteval_min * INTERVAL '1 minute') <= ?", time.Now()).
+		Where("updated_at + (interval_min * INTERVAL '1 minute') <= ?", time.Now()).
 		Order("chat_id").
 		Find(&subs).Error
 

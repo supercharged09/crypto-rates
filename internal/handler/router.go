@@ -6,6 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+
+	httpSwagger "github.com/swaggo/http-swagger"
 )
 
 // NewRouter создает и настраивает HTTP роутер
@@ -16,6 +18,11 @@ func NewRouter(rateHandler *RateHandler) *chi.Mux {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
+
+	// Swagger UI
+	r.Get("/swagger/*", httpSwagger.Handler(
+		httpSwagger.URL("/swagger/doc.json"),
+	))
 
 	// Healthcheck
 	r.Get("/health", func(w http.ResponseWriter, r *http.Request) {

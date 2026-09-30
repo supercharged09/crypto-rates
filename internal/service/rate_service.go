@@ -19,18 +19,21 @@ type RateServiceInterface interface {
 
 // RateService - бизнес логика работы с курсами
 type RateService struct {
-	client   client.CoinGeckoAPI
-	rateRepo repository.RateRepositoryInterface
+	client      client.CoinGeckoAPI
+	rateRepo    repository.RateRepositoryInterface
+	trackedRepo *repository.TrackedCryptoRepository
 }
 
 // NewRateService создает новый сервис
 func NewRateService(
 	client client.CoinGeckoAPI,
 	rateRepo repository.RateRepositoryInterface,
+	trackedRepo *repository.TrackedCryptoRepository,
 ) *RateService {
 	return &RateService{
-		client:   client,
-		rateRepo: rateRepo,
+		client:      client,
+		rateRepo:    rateRepo,
+		trackedRepo: trackedRepo,
 	}
 }
 
@@ -38,31 +41,53 @@ func NewRateService(
 func (s *RateService) FetchAndSaveRates(ctx context.Context) error {
 	log.Println("Fetching rates from CoinGecko...")
 
-	prices, err := s.client.GetPrices()
+	// Собираем список ID: базовые + произвольные
+	ids := make([]string, 0, len(model.SupportedCryptos))
+	for _, crypto := range model.SupportedCryptos {
+		ids = append(ids, crypto.ID)
+	}
+
+	// Если есть репозиторий произвольных монет — добавляем их
+	if s.trackedRepo != nil {
+		tracked, err := s.trackedRepo.GetAll(ctx)
+		if err != nil {
+			log.Printf("WARNING: failed to get tracked cryptos: %v", err)
+		} else {
+			for _, tc := range tracked {
+				ids = append(ids, tc.CoinID)
+			}
+		}
+	}
+
+	// Один запрос ко всем монетам
+	prices, err := s.client.GetPricesForIDs(ids)
 	if err != nil {
 		return fmt.Errorf("failed to fetch prices: %w", err)
 	}
 
 	now := time.Now()
+	saved := 0
 
-	for _, crypto := range model.SupportedCryptos {
-		price, ok := prices[crypto.ID]
+	for _, cryptoID := range ids {
+		price, ok := prices[cryptoID]
 		if !ok {
-			log.Printf("WARNING: no price for %s in response", crypto.ID)
+			log.Printf("WARNING: no price for %s in response", cryptoID)
 			continue
 		}
 
-		// Конвертируем доллары в копейки для хранения
 		rate := model.Rate{
-			Cryptocurrency: crypto.ID,
+			Cryptocurrency: cryptoID,
 			PriceUSDCents:  model.FloatToCents(price),
 			Timestamp:      now,
 		}
 		if err := s.rateRepo.Save(ctx, rate); err != nil {
-			log.Printf("ERROR: failed to save %s rate: %v", crypto.ID, err)
+			log.Printf("ERROR: failed to save %s rate: %v", cryptoID, err)
+			continue
 		}
+		saved++
 	}
-	log.Printf("Rates saved for %d cryptocurrencies", len(prices))
+
+	log.Printf("Rates saved for %d cryptocurrencies", saved)
 	return nil
 }
 

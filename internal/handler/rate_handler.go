@@ -44,7 +44,15 @@ func (h *RateHandler) GetAnalytics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, stats)
 }
 
-// GetAllRates - обработчик GET /rates
+// GetAllRates возвращает курсы всех поддерживаемых криптовалют
+// @Summary      Получить все курсы
+// @Description  Возвращает текущие курсы, min/max за 24ч и изменение за час для всех отслеживаемых монет
+// @Tags         rates
+// @Accept       json
+// @Produce      json
+// @Success      200  {object}  map[string]interface{}
+// @Failure      500  {object}  map[string]string
+// @Router       /rates [get]
 func (h *RateHandler) GetAllRates(w http.ResponseWriter, r *http.Request) {
 	var rates []interface{}
 
@@ -72,7 +80,17 @@ func (h *RateHandler) GetAllRates(w http.ResponseWriter, r *http.Request) {
 
 }
 
-// GetRate - обработчик GET /rates/{cryptocurrency}
+// GetRate возвращает курс конкретной криптовалюты
+// @Summary      Получить курс монеты
+// @Description  Возвращает текущий курс, min/max за 24ч и изменение за час для указанной монеты
+// @Tags         rates
+// @Accept       json
+// @Produce      json
+// @Param        cryptocurrency  path      string  true  "ID монеты (bitcoin, ethereum, btc, eth и т.д.)"
+// @Success      200  {object}  model.RateStats
+// @Failure      400  {object}  map[string]string
+// @Failure      404  {object}  map[string]string
+// @Router       /rates/{cryptocurrency} [get]
 func (h *RateHandler) GetRate(w http.ResponseWriter, r *http.Request) {
 	//chi.URLParam извлекает параметр из URL: /rates/{cryptocurrency}
 	crypto := chi.URLParam(r, "cryptocurrency")
@@ -111,7 +129,16 @@ func writeJSON(w http.ResponseWriter, statusCode int, data interface{}) {
 	}
 }
 
-// GetChart возвращает html с графиком
+// GetChart возвращает HTML с графиком цены за 24 часа
+// @Summary      График цены за 24 часа
+// @Description  Возвращает интерактивный HTML-график цены монеты за последние 24 часа
+// @Tags         chart
+// @Produce      html
+// @Param        cryptocurrency  path      string  true  "ID монеты"
+// @Success      200  {string}  string  "HTML график"
+// @Failure      400  {object}  map[string]string
+// @Failure      500  {object}  map[string]string
+// @Router       /chart/{cryptocurrency} [get]
 func (h *RateHandler) GetChart(w http.ResponseWriter, r *http.Request) {
 	crypto := chi.URLParam(r, "cryptocurrency")
 

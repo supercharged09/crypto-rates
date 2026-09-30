@@ -44,6 +44,7 @@ func (c DatabaseConfig) DSN() string {
 // CoinGeckoConfig — настройки CoinGecko API
 type CoinGeckoConfig struct {
 	BaseURL       string `env:"COINGECKO_URL" env-required:"true"`
+	APIKey        string `env:"COINGECKO_API_KEY" env-default:""`
 	TimeoutSecond int    `env:"COINGECKO_TIMEOUT_SEC" env-required:"true"`
 }
 
@@ -141,4 +142,21 @@ func findProjectRoot() string {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// findEnvFile ищет .env в текущей директории и в корне проекта
+func findEnvFile() string {
+	if fileExists(".env") {
+		return ".env"
+	}
+
+	root := findProjectRoot()
+	if root != "" {
+		envPath := filepath.Join(root, ".env")
+		if fileExists(envPath) {
+			return envPath
+		}
+	}
+
+	return ""
 }
