@@ -1,0 +1,121 @@
+basePath: /
+definitions:
+  model.RateStats:
+    properties:
+      change_percent_1h:
+        type: number
+      cryptocurrency:
+        type: string
+      current_price:
+        type: number
+      last_updated:
+        type: string
+      max_price_24h:
+        type: number
+      min_price_24h:
+        type: number
+    type: object
+host: localhost:8080
+info:
+  contact:
+    email: support@swagger.io
+    name: API Support
+    url: http://www.swagger.io/support
+  description: API для отслеживания курсов криптовалют
+  license:
+    name: Apache 2.0
+    url: http://www.apache.org/licenses/LICENSE-2.0.html
+  termsOfService: http://swagger.io/terms/
+  title: Crypto Rates API
+  version: "1.0"
+paths:
+  /chart/{cryptocurrency}:
+    get:
+      description: Возвращает интерактивный HTML-график цены монеты за последние 24
+        часа
+      parameters:
+      - description: ID монеты
+        in: path
+        name: cryptocurrency
+        required: true
+        type: string
+      produces:
+      - text/html
+      responses:
+        "200":
+          description: HTML график
+          schema:
+            type: string
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: График цены за 24 часа
+      tags:
+      - chart
+  /rates:
+    get:
+      consumes:
+      - application/json
+      description: Возвращает текущие курсы, min/max за 24ч и изменение за час для
+        всех отслеживаемых монет
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Получить все курсы
+      tags:
+      - rates
+  /rates/{cryptocurrency}:
+    get:
+      consumes:
+      - application/json
+      description: Возвращает текущий курс, min/max за 24ч и изменение за час для
+        указанной монеты
+      parameters:
+      - description: ID монеты (bitcoin, ethereum, btc, eth и т.д.)
+        in: path
+        name: cryptocurrency
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.RateStats'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      summary: Получить курс монеты
+      tags:
+      - rates
+swagger: "2.0"
